@@ -1,0 +1,19 @@
+﻿{
+  "Servers": ["SRV01.contoso.local","SRV02.contoso.local","SRV03.contoso.local"],
+  "LogDirectory": "C:\\InfraLogs",
+  "DiskWarningPercent": 20,
+  "Smtp": {
+    "Server": "smtp.contoso.local",
+    "From": "infra-monitor@contoso.local",
+    "To": "admin@contoso.local"
+  },
+  "Tasks": {
+    "AD": true,
+    "DNS": true,
+    "Backup": true,
+    "Maintenance": true,
+    "EventLog": true,
+    "FileServer": true,
+    "Cloud": true
+  }
+}

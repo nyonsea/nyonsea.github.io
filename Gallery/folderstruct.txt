@@ -1,0 +1,13 @@
+﻿設計要件（保守しやすいモジュール形式）
+モジュール化：複数の関数に分けて、読みやすく、単一責任。
+パラメータ制御：どの情報を取得するか、スキップするかをスイッチやパラメータで選択可能。
+リモート実行対応：DC／メンバPC双方に対応。対象ホスト名リストまたは全DC取得など。
+ロギング：実行ログファイル作成、エラーキャッチ、出力フォルダ指定。
+出力オプション：CSV・JSON・HTMLサマリなど。
+モジュールスタイル：PowerShell Module (.psm1 + .psd1) を意識した書き方。
+
+ADDomainInventory\
+  ├ ADDomainInventory.psm1
+  ├ ADDomainInventory.psd1
+  └ Examples\
+      └ Run-Inventory.ps1

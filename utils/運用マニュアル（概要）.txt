@@ -1,0 +1,60 @@
+﻿2. 運用マニュアル（概要）
+2.1 初期準備
+
+モジュール配置
+
+InfraUtility.psm1 → C:\Modules\InfraUtility.psm1
+
+スクリプト配置
+
+InfraUtility_Enterprise_Full.ps1 → C:\Scripts\InfraUtility_Enterprise_Full.ps1
+
+設定ファイル
+
+InfraConfig.json → C:\Scripts\InfraConfig.json
+
+サーバー、メール、閾値、実行タスクを事前に設定
+
+2.2 スケジュールタスク登録
+
+RegisterInfraUtilityTask.bat を右クリック → 管理者として実行
+
+タスクスケジューラに登録されることを確認
+
+タスクスケジューラで [履歴を有効にする] をオンにして実行ログを確認
+
+2.3 運用手順
+
+日次確認
+
+メール通知で重要イベントをチェック
+
+サーバーごとのログも必要に応じて確認
+
+月次管理
+
+古いログの自動削除を確認（30日以上）
+
+JSON設定ファイルのタスク有効/無効を必要に応じて変更
+
+障害対応
+
+メール通知に重要イベントがあった場合、該当サーバーのログ確認
+
+サービス停止やディスク容量不足などは速やかに対応
+
+2.4 拡張方法
+
+新しいサーバー追加 → InfraConfig.json に追記
+
+新しいカテゴリタスク追加 → Invoke-ServerTasks にスクリプト追加
+
+メール通知先変更 → InfraConfig.json の SMTP 設定を編集
+
+2.5 運用上の注意
+
+PowerShell の実行ポリシーはタスク実行ユーザーに適用
+
+メール通知は SMTP サーバーが稼働していることを確認
+
+並列ジョブ数が多い場合はサーバー負荷を監視
