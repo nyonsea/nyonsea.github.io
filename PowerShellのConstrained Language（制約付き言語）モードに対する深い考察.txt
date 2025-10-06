@@ -1,0 +1,25 @@
+PowerShellのConstrained Language（制約付き言語）モードに対する深い考察
+https://teamt5.org/jp/posts/a-deep-dive-into-powershell-s-constrained-language-mode/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
