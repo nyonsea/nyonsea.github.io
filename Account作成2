@@ -1,0 +1,105 @@
+以下はご要望に沿って IN フォルダ内の setuser.csv を読み込み、ユーザーを新規作成し、指定グループへ追加する PowerShell スクリプトです。
+	•	CSV 形式：
+user,pwd,group
+	•	CSV 内の例：
+
+user,pwd,group
+abcd0001,Password123!,Account Operators
+abcd0001,Password123!,Domain Admins
+efgh0001,Password123!,Remote Desktop Users
+efgh0001,Password123!,Group Policy Creator Owners
+
+（複数グループに所属させる場合は同一ユーザーの複数行で対応）
+
+⸻
+
+■ PowerShell スクリプト例（Create-And-SetUser.ps1）
+
+# IN フォルダ内の CSV を読み込み
+$csvPath = ".\IN\setuser.csv"
+
+if (!(Test-Path $csvPath)) {
+    Write-Error "CSV ファイルが見つかりません: $csvPath"
+    exit 1
+}
+
+# CSV を読み込み（user, pwd, group）
+$entries = Import-Csv -Path $csvPath
+
+# ユーザーごとの処理をまとめるための辞書
+$userPasswordMap = @{}
+$userGroupMap    = @{}
+
+foreach ($entry in $entries) {
+    $u = $entry.user
+    $p = $entry.pwd
+    $g = $entry.group
+
+    if (-not $userPasswordMap.ContainsKey($u)) {
+        $userPasswordMap[$u] = $p
+        $userGroupMap[$u] = @()
+    }
+
+    $userGroupMap[$u] += $g
+}
+
+foreach ($user in $userPasswordMap.Keys) {
+
+    $passwordPlain = $userPasswordMap[$user]
+    $password = ConvertTo-SecureString $passwordPlain -AsPlainText -Force
+
+    # すでにユーザーが存在するか確認
+    $adUser = Get-ADUser -Filter "SamAccountName -eq '$user'" -ErrorAction SilentlyContinue
+
+    if ($adUser -eq $null) {
+        # 存在しない場合 → 新規作成
+        Write-Host "ユーザー作成: $user"
+        New-ADUser `
+            -SamAccountName $user `
+            -Name $user `
+            -AccountPassword $password `
+            -Enabled $true `
+            -PasswordNeverExpires $false `
+            -ChangePasswordAtLogon $false
+    } else {
+        Write-Host "既存ユーザー: $user"
+    }
+
+    # グループ追加
+    foreach ($group in $userGroupMap[$user] | Select-Object -Unique) {
+        Write-Host "→ $user を $group に追加"
+        Add-ADGroupMember -Identity $group -Members $user -ErrorAction Stop
+    }
+}
+
+Write-Host "処理完了"
+
+
+⸻
+
+■ スクリプトのポイント
+
+● CSV からユーザーをまとめて処理
+
+同一ユーザーが複数行に登場する想定で、
+	•	パスワードは最初に登場した値を使用
+	•	グループはすべて集約して Unique 化
+としています。
+
+● ユーザーが存在しない場合のみ新規作成
+
+Get-ADUser でチェックし、なければ New-ADUserします。
+
+● 指定グループへの追加
+
+Add-ADGroupMember を使用しています。
+
+⸻
+
+必要であれば以下も作成できます：
+	•	CSV の自動テンプレート作成スクリプト
+	•	ログ出力（成功・失敗の記録）
+	•	グループの存在チェック自動化
+	•	OU 指定でユーザー作成
+
+続けて必要なものをお知らせください。
