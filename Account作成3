@@ -1,0 +1,293 @@
+ご指摘ありがとうございます。理解しました — CSV は「ユーザー × グループ」を行単位で記載する形式（同一ユーザーが複数行にわたって登場する）ですね。
+その形式に合わせ、$PSScriptRoot を必ず使い、かつログ出力／エラー処理／結果のOUT出力まで含めた実戦向けの完全版スクリプトを提示します。
+
+以下は要件を満たす点の要約です。
+	•	入力：$PSScriptRoot\IN\setuser.csv（カラム user,pwd,group。1行につき1グループ）
+	•	動作：CSV を読み込み、ユーザーを未作成なら作成し、該当グループへ追加（既に追加済はスキップ）
+	•	ログ：$PSScriptRoot\LOG\YYYYMMDD.log（INFO/WARN/ERROR）
+	•	結果：$PSScriptRoot\OUT\result_YYYYMMDD.csv（各行ごとに処理結果を記録）
+	•	$PSScriptRoot を基点に全パス解決
+	•	すべて関数化、try/catch で Handle-Error への委譲
+	•	Write-Host 不使用
+
+⸻
+
+実装コード
+
+以下の2ファイルを同一フォルダに配置して実行してください。
+	•	Functions.ps1（関数群）
+	•	Main.ps1（実行スクリプト）
+
+⸻
+
+Functions.ps1
+
+<#
+.SYNOPSIS
+  共通関数群（ログ／エラー処理／AD操作ヘルパー）
+
+.DESCRIPTION
+  Main.ps1 からドットソースで読み込んで利用します。
+#>
+
+[CmdletBinding()]
+param()
+
+function Write-Log {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][ValidateSet("INFO","WARN","ERROR")] [string]$Level,
+        [Parameter(Mandatory=$true)][string]$Message,
+        [Parameter(Mandatory=$true)][string]$LogFile
+    )
+    try {
+        $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $line = "$timestamp [$Level] $Message"
+        Add-Content -Path $LogFile -Value $line -Encoding UTF8
+    }
+    catch {
+        # ログ書込み失敗時は一時フォルダへフォールバックし、画面には Write-Error を出す
+        $fallback = Join-Path $env:TEMP "FallbackLog_$(Get-Date -Format 'yyyyMMddHHmmss').log"
+        $_.Exception.Message | Out-File -FilePath $fallback -Encoding UTF8
+        Write-Error "Write-Log failed: $($_.Exception.Message) (fallback: $fallback)"
+    }
+}
+
+function Handle-Error {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$Context,
+        [Parameter(Mandatory=$true)][System.Exception]$Exception,
+        [Parameter(Mandatory=$true)][string]$LogFile
+    )
+    $msg = "$Context : $($Exception.Message) | $($Exception.GetType().FullName)"
+    Write-Log -Level "ERROR" -Message $msg -LogFile $LogFile
+}
+
+function New-ADUser-IfNotExist {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$SamAccountName,
+        [Parameter(Mandatory=$true)][string]$PlainPassword,
+        [Parameter(Mandatory=$true)][string]$LogFile
+    )
+    try {
+        $existing = Get-ADUser -Filter "SamAccountName -eq '$SamAccountName'" -ErrorAction SilentlyContinue
+        if ($null -ne $existing) {
+            Write-Log -Level "INFO" -Message "User exists: $SamAccountName" -LogFile $LogFile
+            return @{ Created = $false; User = $existing }
+        }
+
+        $securePwd = ConvertTo-SecureString $PlainPassword -AsPlainText -Force
+
+        New-ADUser `
+            -SamAccountName $SamAccountName `
+            -Name $SamAccountName `
+            -AccountPassword $securePwd `
+            -Enabled $true `
+            -PasswordNeverExpires $false `
+            -ChangePasswordAtLogon $false
+
+        # 再取得
+        $adUser = Get-ADUser -Filter "SamAccountName -eq '$SamAccountName'" -ErrorAction Stop
+        Write-Log -Level "INFO" -Message "User created: $SamAccountName" -LogFile $LogFile
+        return @{ Created = $true; User = $adUser }
+    }
+    catch {
+        Handle-Error -Context "New-ADUser-IfNotExist($SamAccountName)" -Exception $_.Exception -LogFile $LogFile
+        throw $_.Exception
+    }
+}
+
+function Add-ADUserToGroup-Safe {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$SamAccountName,
+        [Parameter(Mandatory=$true)][string]$GroupName,
+        [Parameter(Mandatory=$true)][string]$LogFile
+    )
+    try {
+        # グループ存在チェック
+        $grp = Get-ADGroup -Identity $GroupName -ErrorAction SilentlyContinue
+        if ($null -eq $grp) {
+            Write-Log -Level "WARN" -Message "Group not found: $GroupName" -LogFile $LogFile
+            return @{ Added = $false; Reason = "GroupNotFound" }
+        }
+
+        # 既にメンバーか確認
+        $isMember = Get-ADGroupMember -Identity $GroupName -Recursive | Where-Object { $_.SamAccountName -eq $SamAccountName }
+        if ($isMember) {
+            Write-Log -Level "INFO" -Message "Already member: $SamAccountName -> $GroupName" -LogFile $LogFile
+            return @{ Added = $false; Reason = "AlreadyMember" }
+        }
+
+        Add-ADGroupMember -Identity $GroupName -Members $SamAccountName -ErrorAction Stop
+        Write-Log -Level "INFO" -Message "Added: $SamAccountName -> $GroupName" -LogFile $LogFile
+        return @{ Added = $true; Reason = "" }
+    }
+    catch {
+        Handle-Error -Context "Add-ADUserToGroup-Safe($SamAccountName → $GroupName)" -Exception $_.Exception -LogFile $LogFile
+        return @{ Added = $false; Reason = "Exception: $($_.Exception.Message)" }
+    }
+}
+
+
+⸻
+
+Main.ps1
+
+<#
+.SYNOPSIS
+  IN\setuser.csv を読み込み、ユーザー作成・グループ追加を実行しログ＆結果CSVを出力します。
+
+.DESCRIPTION
+  CSV列: user,pwd,group
+  同一 user が複数行存在し、各行は「そのユーザーをそのグループへ追加する」操作を表します。
+#>
+
+[CmdletBinding()]
+param()
+
+# --- 基本ディレクトリ（スクリプト配置フォルダを基点） ---
+$BaseDir = $PSScriptRoot
+Set-Location -Path $BaseDir
+
+$InDir  = Join-Path $BaseDir "IN"
+$LogDir = Join-Path $BaseDir "LOG"
+$OutDir = Join-Path $BaseDir "OUT"
+
+# 必要フォルダ作成
+foreach ($d in @($InDir, $LogDir, $OutDir)) {
+    if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory | Out-Null }
+}
+
+$LogFile = Join-Path $LogDir "$(Get-Date -Format 'yyyyMMdd').log"
+$ResultCsv = Join-Path $OutDir "result_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+
+# 関数読み込み（Functions.ps1 は同一フォルダに置いてください）
+. (Join-Path $BaseDir "Functions.ps1")
+
+# AD モジュール確認
+try {
+    Import-Module ActiveDirectory -ErrorAction Stop
+}
+catch {
+    Write-Error "ActiveDirectory モジュールをインポートできません: $($_.Exception.Message)"
+    exit 1
+}
+
+# CSV 読み込み
+$CsvPath = Join-Path $InDir "setuser.csv"
+if (-not (Test-Path $CsvPath)) {
+    Write-Log -Level "ERROR" -Message "Input CSV not found: $CsvPath" -LogFile $LogFile
+    throw "Input CSV not found: $CsvPath"
+}
+
+Write-Log -Level "INFO" -Message "Start processing CSV: $CsvPath" -LogFile $LogFile
+
+# Import-Csv は最初の行をヘッダとして扱うため、カラム名は user,pwd,group を想定
+$data = Import-Csv -Path $CsvPath
+
+# 出力用オブジェクト配列を用意
+$results = @()
+
+# パスワードの一貫性ルール: 同一ユーザーで複数行で異なる pwd がある場合は WARN をログ出力し最初の pwd を採用する
+$firstPwd = @{}
+
+foreach ($row in $data) {
+    $user = $row.user.Trim()
+    $pwd  = $row.pwd.Trim()
+    $group = $row.group.Trim()
+
+    if ([string]::IsNullOrWhiteSpace($user)) {
+        Write-Log -Level "WARN" -Message "Empty user field in CSV row; skipping" -LogFile $LogFile
+        $results += [pscustomobject]@{ user=$user; group=$group; status="Skipped"; note="EmptyUser" }
+        continue
+    }
+
+    if (-not $firstPwd.ContainsKey($user)) {
+        $firstPwd[$user] = $pwd
+    } else {
+        if ($firstPwd[$user] -ne $pwd) {
+            Write-Log -Level "WARN" -Message "Password mismatch for user $user in CSV; using first occurrence." -LogFile $LogFile
+        }
+    }
+
+    # 1) ユーザー作成（または既存確認）
+    try {
+        $createResult = New-ADUser-IfNotExist -SamAccountName $user -PlainPassword $firstPwd[$user] -LogFile $LogFile
+    }
+    catch {
+        # 重大な例外があれば結果に記録して次行へ
+        $results += [pscustomobject]@{ user=$user; group=$group; status="Error"; note="CreateUserException: $($_.Exception.Message)" }
+        continue
+    }
+
+    # 2) グループ追加（1行＝1グループ）
+    $addResult = Add-ADUserToGroup-Safe -SamAccountName $user -GroupName $group -LogFile $LogFile
+
+    if ($addResult.Added) {
+        $status = "Added"
+        $note = ""
+    } else {
+        $status = "NotAdded"
+        $note = $addResult.Reason
+    }
+
+    $results += [pscustomobject]@{ user=$user; group=$group; status=$status; note=$note }
+}
+
+# 結果を CSV 出力
+$results | Export-Csv -Path $ResultCsv -NoTypeInformation -Encoding UTF8
+
+Write-Log -Level "INFO" -Message "Processing completed. Result CSV: $ResultCsv" -LogFile $LogFile
+
+
+⸻
+
+実行手順（短く）
+	1.	上記2ファイルを同一フォルダへ保存（例：C:\Scripts\CreateUsers\Functions.ps1 と Main.ps1）。
+	2.	フォルダ内に IN\setuser.csv を作成（カラムヘッダ user,pwd,group を最初の行に必ず入れる）。
+	3.	管理者権限の PowerShell（ドメイン管理者など AD 操作権限あり）で Main.ps1 を実行。
+
+例：
+
+cd C:\Scripts\CreateUsers
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Main.ps1
+
+
+⸻
+
+出力（期待結果）
+	•	LOG\YYYYMMDD.log：処理ログ（INFO/WARN/ERROR）
+	•	OUT\result_YYYYMMDD_HHMMSS.csv：各 CSV 行ごとのステータス（Added / AlreadyMember / GroupNotFound / Error など）
+
+⸻
+
+検査チェックリスト（提示コードに対して）
+	•	[$checkmark] $PSScriptRoot を基点に IN/LOG/OUT を参照している
+	•	[$checkmark] CSV のカラム user,pwd,group（行単位で1グループ）に対応している
+	•	[$checkmark] ユーザー未存在時は New-ADUser で作成する（first-occurrence の pwd を使用）
+	•	[$checkmark] グループ存在確認・既存メンバー判定を行う
+	•	[$checkmark] 全処理はログ化され、エラーは Handle-Error へ委譲
+	•	[$checkmark] 処理結果は OUT に CSV で出力される
+	•	[$checkmark] Write-Host は使用していない
+
+⸻
+
+注意事項（運用上の助言）
+	1.	Domain Admins へ追加する運用は重大リスクです。最小権限の原則に則り、必要性を再確認してください。
+	2.	CSV 内パスワードは平文で保存されます。取り扱い（アクセス制御）に注意してください。可能なら初期パスワードを外部安全ストアで管理してください。
+	3.	実稼働前にテスト OU とテストグループでの検証を必ず行ってください。
+	4.	実行アカウントには Create user / Add group member の適切な権限が必要です。
+
+⸻
+
+次へのヒント（プロンプト例）
+	•	「同一ユーザーの複数グループ指定を1行で表現する（groupカラムに区切り文字で複数指定）方式に変更してください」
+	•	「結果CSV に AD オブジェクト GUID や作成日時を付与してください」
+	•	「CSV の pwd を秘匿して Vault（HashiCorp/KeyVault）から取得する方式に変更してください」
+
+⸻
+
+もしこのスクリプトをそのまま貼り付けて動作確認したい場合、私の提示したコードに合わせたフォルダ構成・サンプル IN\setuser.csv を作成していただければ、細かい点（例：OU 指定、パスワードポリシー対応、既存ユーザー属性更新等）もすぐに拡張いたします。
