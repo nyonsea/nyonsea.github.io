@@ -1,0 +1,168 @@
+承知しました。
+ご要望は次の 2 段階の対話式チェック を必ず行うことです。
+	1.	処理しようとしているユーザー名を最初に表示する
+	2.	そのユーザーで問題なければ ENTER キーで承認
+	3.	次の行のユーザー名が前ユーザーと異なる場合のみ、再度表示＋ENTER確認
+
+つまり 「ユーザーが変わるたびに確認 → ENTER を押したらそのユーザーの全グループ処理開始」 という設計になります。
+
+以下は、あなたの仕様どおりに実装した Main.ps1 の対話処理部分です。
+
+⸻
+
+■ 対話式ユーザー確認付き Main.ps1（差分ではなく完全版）
+
+※ Functions.ps1 は前回提示したものをそのまま使用できます。
+※ setuser.csv（user,pwd,group）は一切変更不要です。
+
+[CmdletBinding()]
+param()
+
+# --- 基本ディレクトリ ---
+$BaseDir = $PSScriptRoot
+Set-Location -Path $BaseDir
+
+$InDir  = Join-Path $BaseDir "IN"
+$LogDir = Join-Path $BaseDir "LOG"
+$OutDir = Join-Path $BaseDir "OUT"
+
+foreach ($d in @($InDir, $LogDir, $OutDir)) {
+    if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory | Out-Null }
+}
+
+$LogFile = Join-Path $LogDir "$(Get-Date -Format 'yyyyMMdd').log"
+$ResultCsv = Join-Path $OutDir "result_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+
+# 関数読み込み
+. (Join-Path $BaseDir "Functions.ps1")
+
+# AD モジュール
+Import-Module ActiveDirectory -ErrorAction Stop
+
+# CSV 読み込み
+$CsvPath = Join-Path $InDir "setuser.csv"
+if (-not (Test-Path $CsvPath)) {
+    Write-Log -Level "ERROR" -Message "CSV not found: $CsvPath" -LogFile $LogFile
+    throw "CSV not found"
+}
+
+$data = Import-Csv -Path $CsvPath
+
+Write-Log -Level "INFO" -Message "Start processing CSV: $CsvPath" -LogFile $LogFile
+
+# 結果格納
+$results = @()
+$firstPwd = @{}
+$previousUser = ""
+
+foreach ($row in $data) {
+
+    $user  = $row.user.Trim()
+    $pwd   = $row.pwd.Trim()
+    $group = $row.group.Trim()
+
+    # --- (1) ユーザー変更時のみ確認を行う ---
+    if ($user -ne $previousUser) {
+
+        Write-Host ""
+        Write-Host "====================================================="
+        Write-Host " 次のユーザーを処理します： $user"
+        Write-Host " 問題なければ ENTER キーを押してください。"
+        Write-Host "====================================================="
+        Read-Host   # ENTER待ち
+
+        $previousUser = $user
+    }
+
+    # --- (2) パスワードはユーザーごとに最初の1回だけ採用 ---
+    if (-not $firstPwd.ContainsKey($user)) {
+        $firstPwd[$user] = $pwd
+    } elseif ($firstPwd[$user] -ne $pwd) {
+        Write-Log -Level "WARN" -Message "Password mismatch for $user. Using first value." -LogFile $LogFile
+    }
+
+    # --- (3) ユーザー作成（存在しなければ） ---
+    try {
+        $createResult = New-ADUser-IfNotExist `
+            -SamAccountName $user `
+            -PlainPassword $firstPwd[$user] `
+            -LogFile $LogFile
+    }
+    catch {
+        $results += [pscustomobject]@{
+            user=$user; group=$group; status="Error"; note="UserCreateException"
+        }
+        continue
+    }
+
+    # --- (4) グループ追加 ---
+    $add = Add-ADUserToGroup-Safe -SamAccountName $user -GroupName $group -LogFile $LogFile
+
+    if ($add.Added) {
+        $status = "Added"
+        $note = ""
+    } else {
+        $status = "NotAdded"
+        $note = $add.Reason
+    }
+
+    $results += [pscustomobject]@{
+        user=$user; group=$group; status=$status; note=$note
+    }
+}
+
+# --- 結果出力 ---
+$results | Export-Csv -Path $ResultCsv -Encoding UTF8 -NoTypeInformation
+Write-Log -Level "INFO" -Message "Completed. Result: $ResultCsv" -LogFile $LogFile
+
+
+⸻
+
+■ 動作フロー（あなたの指定どおり）
+
+例：setuser.csv がこうなっている場合
+
+user,pwd,group
+abcd0001,P@ss,Account Operators
+abcd0001,P@ss,Domain Admins
+efgh0001,P@ss,Account Operators
+efgh0001,P@ss,Domain Admins
+
+処理はこう進みます：
+
+=====================================================
+ 次のユーザーを処理します： abcd0001
+ 問題なければ ENTER キーを押してください。
+=====================================================
+（ENTER を押すまで停止）
+→ abcd0001 のグループをすべて処理
+
+=====================================================
+ 次のユーザーを処理します： efgh0001
+ 問題なければ ENTER キーを押してください。
+=====================================================
+（ENTER を押すまで停止）
+→ efgh0001 のグループをすべて処理
+
+
+⸻
+
+■ 要件すべて満たしています
+
+✓ ユーザーごとに確認メッセージ
+✓ ENTER キーを押すまで処理停止
+✓ 次ユーザーに変わった時だけ再確認
+✓ setuser.csv の構造は一切変更なし
+✓ ログ、ディレクトリ構成、関数構造すべて準拠
+
+⸻
+
+必要であれば、
+	•	「Y/N で確認する形式」
+	•	「スキップ機能」
+	•	「対話メニュー（続行、スキップ、終了）」
+	•	「ユーザーごとの確認ログの追加」
+
+なども実装できます。
+
+ご希望があればお知らせください。
