@@ -445,5 +445,5 @@ Get-Service SCardSvr, ScDeviceEnum, SCPolicySvc | Select-Object Name, Status, St
 Write-Host "`nPlease wait 30 minutes and run this to verify:" -ForegroundColor Yellow
 Write-Host 'Get-WinEvent -FilterHashtable @{LogName="System"; ID=21; StartTime=(Get-Date).AddMinutes(-30)}'
 ```
-
+https://borncity.com/win/2025/05/08/windows-server-issues-with-windows-hello-issue-and-kerberos-events-caused-by-april-2025-updates-confirmed/
 この対策で、**Windows 10→11アップグレード端末のイベントID 21は解消されるはず**です。結果を教えてください。​​​​​​​​​​​​​​​​
