@@ -1,0 +1,449 @@
+**重要な新情報です！** Windows 10から11にアップグレードした端末すべてで発生しているということは、**アップグレード時の設定移行に問題がある**可能性が高いです。
+
+## Windows 10→11アップグレードで発生する証明書関連の既知問題
+
+### 【最有力原因】アップグレード時の証明書ストアの不整合
+
+Windows 10から11へのアップグレード時に、以下の問題が発生することが報告されています：
+
+1. **古い証明書マッピングの残存**
+1. **スマートカードログオンプロバイダーの設定が引き継がれる**
+1. **TPM証明書の不整合**
+1. **Windows Hello for Business設定の誤移行**
+
+## 緊急確認事項
+
+### 【確認1】Windows Hello for Business の状態
+
+```powershell
+# アップグレード端末で実行
+Write-Host "=== Windows Hello for Business Status ===" -ForegroundColor Cyan
+
+# レジストリ確認
+$whfbPaths = @(
+    "HKLM:\SOFTWARE\Policies\Microsoft\PassportForWork",
+    "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\PassportForWork",
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{D6886603-9D2F-4EB2-B667-1971041FA96B}"
+)
+
+foreach ($path in $whfbPaths) {
+    if (Test-Path $path) {
+        Write-Host "`n=== $path ===" -ForegroundColor Yellow
+        Get-ItemProperty -Path $path -ErrorAction SilentlyContinue | Format-List
+    }
+}
+
+# Windows Hello状態
+certutil -csptest | Select-String -Pattern "Provider Name:|Provider Type:"
+```
+
+### 【確認2】TPM証明書の状態
+
+```powershell
+# TPM証明書の確認
+Write-Host "`n=== TPM Certificates ===" -ForegroundColor Cyan
+Get-ChildItem Cert:\LocalMachine\My | Where-Object {
+    $_.Subject -like "*TPM*" -or 
+    $_.FriendlyName -like "*TPM*" -or
+    $_.Issuer -like "*TPM*"
+} | Select-Object Subject, Issuer, NotAfter, Thumbprint | Format-List
+
+# TPMの状態
+Get-Tpm | Format-List
+
+# NGC (Next Generation Credentials) フォルダの確認
+if (Test-Path "C:\Windows\ServiceProfiles\LocalService\AppData\Local\Microsoft\Ngc") {
+    Write-Host "NGC folder exists - Windows Hello or Certificate-based auth may be configured"
+    Get-ChildItem "C:\Windows\ServiceProfiles\LocalService\AppData\Local\Microsoft\Ngc" -Recurse -ErrorAction SilentlyContinue | 
+        Select-Object FullName, Length, LastWriteTime
+}
+```
+
+### 【確認3】スマートカード認証プロバイダーの登録
+
+```powershell
+# 認証プロバイダーの確認
+Write-Host "`n=== Credential Providers ===" -ForegroundColor Cyan
+Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\*" | 
+    Select-Object PSChildName, "(Default)" | Format-Table
+
+# スマートカード関連のプロバイダーを確認
+$scProviders = @(
+    "{8FD7E19C-3BF7-489B-A72C-846AB3678C96}",  # SmartcardCredentialProvider
+    "{8AF662BF-65A0-4D0A-A540-A338A999D36F}",  # SmartcardPinProvider  
+    "{94596C7E-3744-41CE-893E-BBF09122F76A}",  # SmartcardReaderSelectionProvider
+    "{D6886603-9D2F-4EB2-B667-1971041FA96B}"   # NGC (Windows Hello) Provider
+)
+
+foreach ($provider in $scProviders) {
+    $path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$provider"
+    if (Test-Path $path) {
+        Write-Host "`nProvider: $provider" -ForegroundColor Yellow
+        Get-ItemProperty -Path $path | Format-List
+    }
+}
+```
+
+### 【確認4】証明書の自動登録設定
+
+```powershell
+# 証明書の自動登録状態
+Write-Host "`n=== Certificate Auto-Enrollment ===" -ForegroundColor Cyan
+
+# ユーザー証明書
+certutil -pulse
+certutil -user -enrollmentServerURL
+
+# コンピューター証明書
+certutil -enrollmentServerURL
+
+# 保留中の証明書要求
+certutil -store REQUEST
+```
+
+## 根本的な解決策
+
+### 【解決策1】証明書ストアのクリーンアップ（最有力）
+
+アップグレード時に引き継がれた不正な証明書や設定をクリーンアップ：
+
+```powershell
+# === 管理者権限のPowerShellで実行 ===
+
+Write-Host "=== Certificate Store Cleanup ===" -ForegroundColor Cyan
+
+# 1. 無効な証明書の確認
+certutil -verifystore -user my
+certutil -verifystore my
+
+# 2. 期限切れ・無効な証明書の削除
+Write-Host "`nRemoving expired/invalid certificates..." -ForegroundColor Yellow
+
+# ユーザーストアから期限切れ証明書を削除
+Get-ChildItem Cert:\CurrentUser\My | Where-Object {
+    $_.NotAfter -lt (Get-Date) -or
+    $_.Verify() -eq $false
+} | ForEach-Object {
+    Write-Host "Removing: $($_.Subject) (Expired: $($_.NotAfter))" -ForegroundColor Red
+    Remove-Item $_.PSPath -Force
+}
+
+# コンピューターストアから期限切れ証明書を削除
+Get-ChildItem Cert:\LocalMachine\My | Where-Object {
+    $_.NotAfter -lt (Get-Date) -or
+    $_.Verify() -eq $false
+} | ForEach-Object {
+    Write-Host "Removing: $($_.Subject) (Expired: $($_.NotAfter))" -ForegroundColor Red
+    Remove-Item $_.PSPath -Force
+}
+```
+
+### 【解決策2】スマートカード認証の完全無効化（業務で使用していない場合）
+
+```powershell
+# スマートカードサービスの無効化
+$scServices = @("SCardSvr", "ScDeviceEnum", "SCPolicySvc", "CertPropSvc")
+
+foreach ($svc in $scServices) {
+    try {
+        $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
+        if ($service) {
+            Write-Host "Disabling: $($service.DisplayName)" -ForegroundColor Yellow
+            Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+            Set-Service -Name $svc -StartupType Disabled
+        }
+    } catch {
+        Write-Host "Service $svc: $_" -ForegroundColor Gray
+    }
+}
+
+# 証明書伝播サービス（アップグレード時の問題の原因になることがある）
+Stop-Service -Name "CertPropSvc" -Force -ErrorAction SilentlyContinue
+Set-Service -Name "CertPropSvc" -StartupType Manual
+```
+
+### 【解決策3】Windows Hello / NGC の無効化
+
+```powershell
+# NGC（Windows Hello）フォルダのクリーンアップ
+$ngcPaths = @(
+    "C:\Windows\ServiceProfiles\LocalService\AppData\Local\Microsoft\Ngc",
+    "C:\Windows\ServiceProfiles\LocalService\AppData\Local\Microsoft\Vault"
+)
+
+foreach ($path in $ngcPaths) {
+    if (Test-Path $path) {
+        Write-Host "Cleaning NGC path: $path" -ForegroundColor Yellow
+        # サービス停止が必要
+        Stop-Service -Name "NgcSvc", "NgcCtnrSvc" -Force -ErrorAction SilentlyContinue
+        
+        # バックアップ
+        $backupPath = "$path`_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        Move-Item -Path $path -Destination $backupPath -Force -ErrorAction SilentlyContinue
+        
+        # サービス再起動
+        Start-Service -Name "NgcSvc", "NgcCtnrSvc" -ErrorAction SilentlyContinue
+    }
+}
+```
+
+### 【解決策4】レジストリ設定の修正
+
+```powershell
+# スマートカード強制ログオンの無効化
+$regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+
+# scforceoption を削除または 0 に設定
+if (Test-Path $regPath) {
+    Remove-ItemProperty -Path $regPath -Name "scforceoption" -ErrorAction SilentlyContinue
+    Write-Host "Removed scforceoption from registry" -ForegroundColor Green
+}
+
+# Windows Hello の無効化（ポリシー）
+$whfbPath = "HKLM:\SOFTWARE\Policies\Microsoft\PassportForWork"
+if (-not (Test-Path $whfbPath)) {
+    New-Item -Path $whfbPath -Force | Out-Null
+}
+Set-ItemProperty -Path $whfbPath -Name "Enabled" -Value 0 -Type DWord
+Write-Host "Disabled Windows Hello for Business via registry" -ForegroundColor Green
+```
+
+## GPOによる全端末への一括適用
+
+### 【GPO設定1】スマートカードサービスの無効化
+
+```
+グループポリシー管理
+└ 新規GPO: "Fix Win10to11 Upgrade - Disable SmartCard"
+  └ コンピューターの構成
+    └ 基本設定
+      └ コントロールパネルの設定
+        └ サービス
+          → SCardSvr: スタートアップ「無効」、サービスの動作「サービスを停止」
+          → ScDeviceEnum: スタートアップ「無効」、サービスの動作「サービスを停止」
+          → SCPolicySvc: スタートアップ「無効」、サービスの動作「サービスを停止」
+```
+
+### 【GPO設定2】Windows Hello の無効化
+
+```
+コンピューターの構成
+└ ポリシー
+  └ 管理用テンプレート
+    └ Windowsコンポーネント
+      └ Windows Hello for Business
+        → "Windows Hello for Businessを使用する": 無効
+```
+
+### 【GPO設定3】スマートカード強制ログオンの無効化
+
+```
+コンピューターの構成
+└ ポリシー
+  └ Windowsの設定
+    └ セキュリティの設定
+      └ ローカルポリシー
+        └ セキュリティオプション
+          → "対話型ログオン: スマート カードが必要": 無効
+```
+
+### 【GPO設定4】クリーンアップスクリプトの配布
+
+```
+コンピューターの構成
+└ ポリシー
+  └ Windowsの設定
+    └ スクリプト (スタートアップ/シャットダウン)
+      └ スタートアップ
+```
+
+スクリプト内容（`cleanup_upgrade_smartcard.ps1`）：
+
+```powershell
+# Windows 10→11 アップグレード後のスマートカード設定クリーンアップ
+
+# ログファイル
+$logPath = "C:\Windows\Temp\SmartCardCleanup.log"
+function Write-Log {
+    param($Message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$timestamp - $Message" | Out-File -FilePath $logPath -Append
+}
+
+Write-Log "=== SmartCard Cleanup Started ==="
+
+# 1. サービスの停止
+$services = @("SCardSvr", "ScDeviceEnum", "SCPolicySvc")
+foreach ($svc in $services) {
+    try {
+        Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+        Set-Service -Name $svc -StartupType Disabled
+        Write-Log "Disabled service: $svc"
+    } catch {
+        Write-Log "Error disabling $svc : $_"
+    }
+}
+
+# 2. レジストリクリーンアップ
+try {
+    Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
+        -Name "scforceoption" -ErrorAction SilentlyContinue
+    Write-Log "Removed scforceoption"
+} catch {
+    Write-Log "scforceoption not found or error: $_"
+}
+
+# 3. 期限切れ証明書の削除
+try {
+    $expiredCount = 0
+    Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object {
+        $_.NotAfter -lt (Get-Date)
+    } | ForEach-Object {
+        Remove-Item $_.PSPath -Force
+        $expiredCount++
+    }
+    Write-Log "Removed $expiredCount expired certificates"
+} catch {
+    Write-Log "Error removing certificates: $_"
+}
+
+Write-Log "=== SmartCard Cleanup Completed ==="
+```
+
+## フィルタリング - アップグレード端末のみに適用
+
+GPOのWMIフィルタを使用して、Windows 11アップグレード端末のみに適用：
+
+```sql
+-- WMI Filter: Windows 11 Upgraded from Windows 10
+SELECT * FROM Win32_OperatingSystem WHERE 
+    Caption LIKE "%Windows 11%" AND 
+    InstallDate > "20231001000000.000000+000"
+```
+
+または、レジストリキーで識別：
+
+```powershell
+# アップグレード履歴の確認
+Get-ItemProperty "HKLM:\SYSTEM\Setup\Source OS*" -ErrorAction SilentlyContinue
+```
+
+## 一括展開スクリプト
+
+すべてのアップグレード端末を対象に一括実行：
+
+```powershell
+# === ドメイン管理者として実行 ===
+
+# Windows 11端末の取得（OSBuildが22000以上）
+$win11Computers = Get-ADComputer -Filter {OperatingSystem -like "*Windows 11*"} -Properties OperatingSystem, OperatingSystemVersion
+
+Write-Host "Found $($win11Computers.Count) Windows 11 computers" -ForegroundColor Cyan
+
+foreach ($computer in $win11Computers) {
+    Write-Host "`nProcessing: $($computer.Name)" -ForegroundColor Yellow
+    
+    try {
+        # リモート実行
+        Invoke-Command -ComputerName $computer.Name -ScriptBlock {
+            # スマートカードサービスを無効化
+            $services = @("SCardSvr", "ScDeviceEnum", "SCPolicySvc")
+            foreach ($svc in $services) {
+                Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+                Set-Service -Name $svc -StartupType Disabled -ErrorAction SilentlyContinue
+            }
+            
+            # レジストリクリーンアップ
+            Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
+                -Name "scforceoption" -ErrorAction SilentlyContinue
+            
+            # イベント21のカウント（過去24時間）
+            $eventCount = (Get-WinEvent -FilterHashtable @{
+                LogName='System'
+                ID=21
+                StartTime=(Get-Date).AddHours(-24)
+            } -ErrorAction SilentlyContinue).Count
+            
+            return @{
+                ComputerName = $env:COMPUTERNAME
+                ServicesDisabled = $true
+                Event21Count = $eventCount
+            }
+        } -ErrorAction Stop
+        
+        Write-Host "Success: $($computer.Name)" -ForegroundColor Green
+        
+    } catch {
+        Write-Host "Failed: $($computer.Name) - $_" -ForegroundColor Red
+    }
+}
+```
+
+## 監視と検証
+
+```powershell
+# 対策後の効果測定
+$computers = Get-ADComputer -Filter {OperatingSystem -like "*Windows 11*"} -Properties Name
+
+$results = @()
+foreach ($pc in $computers) {
+    try {
+        $eventCount = Invoke-Command -ComputerName $pc.Name -ScriptBlock {
+            (Get-WinEvent -FilterHashtable @{
+                LogName='System'
+                ID=21
+                StartTime=(Get-Date).AddDays(-1)
+            } -ErrorAction SilentlyContinue).Count
+        } -ErrorAction SilentlyContinue
+        
+        $results += [PSCustomObject]@{
+            ComputerName = $pc.Name
+            Event21Count = $eventCount
+            Status = if ($eventCount -eq 0) { "OK" } else { "Issue" }
+        }
+    } catch {}
+}
+
+$results | Sort-Object Event21Count -Descending | Format-Table -AutoSize
+$results | Export-Csv -Path "C:\temp\Event21_Status.csv" -NoTypeInformation
+```
+
+## 今すぐ実行すべきコマンド
+
+アップグレード端末1台で以下を実行してテスト：
+
+```powershell
+# === テスト端末で実行 ===
+
+Write-Host "=== Phase 1: Diagnosis ===" -ForegroundColor Cyan
+
+# Windows Hello状態
+certutil -csptest | Select-String "Provider"
+
+# 認証プロバイダー
+Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\*" | 
+    Select-Object PSChildName | Format-Table
+
+# 過去24時間のイベント21
+$beforeCount = (Get-WinEvent -FilterHashtable @{LogName='System'; ID=21; StartTime=(Get-Date).AddHours(-24)} -ErrorAction SilentlyContinue).Count
+Write-Host "`nEvent 21 count (last 24h): $beforeCount" -ForegroundColor Yellow
+
+Write-Host "`n=== Phase 2: Fix ===" -ForegroundColor Green
+
+# サービス無効化
+"SCardSvr", "ScDeviceEnum", "SCPolicySvc" | ForEach-Object {
+    Stop-Service -Name $_ -Force -ErrorAction SilentlyContinue
+    Set-Service -Name $_ -StartupType Disabled
+}
+
+# レジストリクリーンアップ
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "scforceoption" -ErrorAction SilentlyContinue
+
+Write-Host "`n=== Phase 3: Verification ===" -ForegroundColor Cyan
+Get-Service SCardSvr, ScDeviceEnum, SCPolicySvc | Select-Object Name, Status, StartType | Format-Table
+
+Write-Host "`nPlease wait 30 minutes and run this to verify:" -ForegroundColor Yellow
+Write-Host 'Get-WinEvent -FilterHashtable @{LogName="System"; ID=21; StartTime=(Get-Date).AddMinutes(-30)}'
+```
+
+この対策で、**Windows 10→11アップグレード端末のイベントID 21は解消されるはず**です。結果を教えてください。​​​​​​​​​​​​​​​​
