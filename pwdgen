@@ -1,0 +1,57 @@
+param(
+    [int]$Length = 12,
+    [int]$Count = 10,
+    [string]$Output = "passwords.csv"
+)
+
+# 似た文字を除く
+$Ambiguous = @('O','0','I','l')
+
+# 見やすい記号
+$Symbols = "!#$%*+-=?@".ToCharArray()
+
+# 文字セット
+$Lower = ('a'..'z') | Where-Object { $_ -notin $Ambiguous }
+$Upper = ('A'..'Z') | Where-Object { $_ -notin $Ambiguous }
+$Digits = ('0'..'9') | Where-Object { $_ -notin $Ambiguous }
+
+# 結合
+$All = $Lower + $Upper + $Digits + $Symbols
+
+if ($Length -lt 4) {
+    throw "長さは4以上が必要です。"
+}
+
+function New-StrictPassword {
+    param([int]$Len)
+
+    # 各カテゴリから必須1文字
+    $pwd = @()
+    $pwd += ($Lower | Get-Random)
+    $pwd += ($Upper | Get-Random)
+    $pwd += ($Digits | Get-Random)
+    $pwd += ($Symbols | Get-Random)
+
+    # 残り
+    for ($i = 4; $i -lt $Len; $i++) {
+        $pwd += ($All | Get-Random)
+    }
+
+    # シャッフル
+    $pwd = $pwd | Sort-Object { Get-Random }
+
+    return -join $pwd
+}
+
+# 結果格納
+$results = for ($i = 1; $i -le $Count; $i++) {
+    [PSCustomObject]@{
+        No        = $i
+        Password  = (New-StrictPassword -Len $Length)
+    }
+}
+
+# CSV に出力
+$results | Export-Csv -Path $Output -Encoding UTF8 -NoTypeInformation
+
+Write-Host "CSV 出力完了 → $Output"
