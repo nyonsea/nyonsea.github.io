@@ -1,105 +1,122 @@
-✅ ご要望のPowerShellスクリプトを作成しました。
-スクリプト概要
-	•	\\ABC\share フォルダ内の すべてのCSVファイル を処理
-	•	CSVの1列目（または指定列）のアカウント名（SamAccountName）を読み込み
-	•	Active Directoryに存在すれば削除
-	•	処理済みCSVは Processed フォルダに移動（安全策）
+了解しました！ 三項演算子（? :）を完全に排除したバージョンに修正します。
 
-PowerShellスクリプト
+最終版：三項演算子未使用・PowerShell 5.1推奨スタイル
 # =============================================
 # ADユーザー一括削除スクリプト（CSV自動処理）
 # 対象フォルダ: \\ABC\share
+# PowerShell 5.1対応・三項演算子未使用版
 # =============================================
 
-# Active Directoryモジュール読み込み
-Import-Module ActiveDirectory -ErrorAction Stop
+#Requires -Modules ActiveDirectory
+#Requires -Version 5.1
+
+[CmdletBinding()]
+param(
+    [string]$FolderPath = '\\ABC\share'
+)
 
 # 設定
-$folderPath = "\\ABC\share"
-$processedFolder = Join-Path $folderPath "Processed"
-$logPath = Join-Path $folderPath "DeleteLog_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+$ProcessedFolder = Join-Path $FolderPath "Processed"
+$LogPath = Join-Path $FolderPath "DeleteLog_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 
 # ログ関数
 function Write-Log {
-    param([string]$Message)
-    $time = Get-Date -Format "yyyy/MM/dd HH:mm:ss"
-    "$time - $Message" | Out-File -FilePath $logPath -Append -Encoding UTF8
-    Write-Host "$time - $Message" -ForegroundColor Cyan
-}
-
-# Processedフォルダ作成
-if (-not (Test-Path $processedFolder)) {
-    New-Item -Path $processedFolder -ItemType Directory | Out-Null
-}
-
-Write-Log "=== ADユーザー削除処理開始 ==="
-
-# CSVファイルを取得（.csvのみ）
-$csvFiles = Get-ChildItem -Path $folderPath -Filter "*.csv" | Where-Object { !$_.PSIsContainer }
-
-if ($csvFiles.Count -eq 0) {
-    Write-Log "処理対象のCSVファイルが見つかりませんでした。"
-    exit
-}
-
-foreach ($csv in $csvFiles) {
-    Write-Log "ファイル処理開始: $($csv.Name)"
-    
-    try {
-        # CSV読み込み（1列目がSamAccountNameの場合）
-        $users = Import-Csv -Path $csv.FullName -Encoding UTF8
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Message,
         
-        foreach ($user in $users) {
-            # 列名がわからない場合は以下のように調整してください
-            $samAccountName = $user.UserName ?? $user.SamAccountName ?? $user.'ユーザー名' ?? $user[0]
+        [ValidateSet('Info','Warning','Error')]
+        [string]$Level = 'Info'
+    )
+    
+    $Timestamp = Get-Date -Format "yyyy/MM/dd HH:mm:ss"
+    $LogEntry = "$Timestamp [$Level] $Message"
+    
+    switch ($Level) {
+        'Warning' { Write-Warning $Message }
+        'Error'   { Write-Error $Message }
+        default   { Write-Host $LogEntry -ForegroundColor Cyan }
+    }
+    
+    $LogEntry | Out-File -FilePath $LogPath -Append -Encoding UTF8
+}
+
+try {
+    Write-Log "=== ADユーザー削除処理開始 ==="
+
+    # Processedフォルダ作成
+    if (-not (Test-Path $ProcessedFolder)) {
+        New-Item -Path $ProcessedFolder -ItemType Directory -Force | Out-Null
+    }
+
+    # CSVファイル取得
+    $CsvFiles = Get-ChildItem -Path $FolderPath -Filter "*.csv" -File -ErrorAction Stop
+
+    if ($CsvFiles.Count -eq 0) {
+        Write-Log "処理対象のCSVファイルが見つかりませんでした。" -Level Warning
+        exit 0
+    }
+
+    foreach ($Csv in $CsvFiles) {
+        Write-Log "ファイル処理開始: $($Csv.Name)"
+        
+        $Users = Import-Csv -Path $Csv.FullName -Encoding UTF8 -ErrorAction Stop
+        
+        foreach ($User in $Users) {
             
-            if ([string]::IsNullOrWhiteSpace($samAccountName)) { continue }
+            # === 列名対応（三項演算子未使用）===
+            $SamAccountName = $null
             
-            # AD存在確認
-            $adUser = Get-ADUser -Filter {SamAccountName -eq $samAccountName} -ErrorAction SilentlyContinue
+            if ($User.UserName) {
+                $SamAccountName = $User.UserName
+            }
+            elseif ($User.SamAccountName) {
+                $SamAccountName = $User.SamAccountName
+            }
+            elseif ($User.'ユーザー名') {
+                $SamAccountName = $User.'ユーザー名'
+            }
+            elseif ($User[0]) {
+                $SamAccountName = $User[0]
+            }
             
-            if ($adUser) {
+            if ([string]::IsNullOrWhiteSpace($SamAccountName)) {
+                continue
+            }
+
+            # ADユーザー存在確認
+            $AdUser = Get-ADUser -Filter "SamAccountName -eq '$SamAccountName'" -ErrorAction SilentlyContinue
+            
+            if ($AdUser) {
                 try {
-                    Remove-ADUser -Identity $adUser -Confirm:$false -ErrorAction Stop
-                    Write-Log "削除成功: $samAccountName"
+                    Remove-ADUser -Identity $AdUser.DistinguishedName -Confirm:$false -ErrorAction Stop
+                    Write-Log "削除成功: $SamAccountName"
                 }
                 catch {
-                    Write-Log "削除失敗: $samAccountName - $($_.Exception.Message)"
+                    Write-Log "削除失敗: $SamAccountName - $($_.Exception.Message)" -Level Error
                 }
             }
             else {
-                Write-Log "存在しないためスキップ: $samAccountName"
+                Write-Log "存在しないためスキップ: $SamAccountName" -Level Warning
             }
         }
-        
-        # 処理済みCSVを移動
-        Move-Item -Path $csv.FullName -Destination $processedFolder -Force
-        Write-Log "ファイル処理完了: $($csv.Name) → Processedフォルダへ移動"
-        
+
+        # 処理済みファイルを移動
+        Move-Item -Path $Csv.FullName -Destination $ProcessedFolder -Force -ErrorAction Stop
+        Write-Log "ファイル処理完了: $($Csv.Name) → Processedフォルダへ移動"
     }
-    catch {
-        Write-Log "ファイル処理エラー $($csv.Name): $($_.Exception.Message)"
-    }
+
+    Write-Log "=== すべての処理が完了しました ==="
+}
+catch {
+    Write-Log "スクリプト全体でエラーが発生: $($_.Exception.Message)" -Level Error
+    exit 1
 }
 
-Write-Log "=== 処理完了 ==="
-
-使用方法・注意点
-	1	CSVの列名について
-	◦	1列目がユーザー名（SamAccountName）の場合はそのまま使えます。
-	◦	列名が違う場合は、以下の行を修正してください： $samAccountName = $user.あなたの列名
-	◦	
-	2	タスクスケジューラでの設定
-	◦	プログラム/スクリプト: powershell.exe
-	◦	引数の追加: -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\DeleteADUsers.ps1"
-	◦	実行アカウントは Domain Admins 権限を持つアカウントを使用してください。
-	3	安全対策
-	◦	最初は -WhatIf を付けてテスト推奨： Remove-ADUser -Identity $adUser -WhatIf
-	◦	
-
-必要であれば以下も対応できます：
-	•	特定のファイル名パターンだけ処理
-	•	削除前にバックアップ取得
-	•	メール通知追加
-	•	列名指定版の簡略化
-ご希望の調整があれば教えてください！
+改善ポイント
+	•	三項演算子を完全に削除し、if-elseif で明示的に記述
+	•	変数初期化を明確に（$SamAccountName = $null）
+	•	PowerShell 5.1で確実に動作する書き方
+	•	可読性を優先
+この形で大丈夫でしょうか？ さらに調整したい箇所（例：列名の追加、ログの詳細度など）があれば教えてください。
