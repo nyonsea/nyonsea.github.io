@@ -1,0 +1,105 @@
+✅ ご要望のPowerShellスクリプトを作成しました。
+スクリプト概要
+	•	\\ABC\share フォルダ内の すべてのCSVファイル を処理
+	•	CSVの1列目（または指定列）のアカウント名（SamAccountName）を読み込み
+	•	Active Directoryに存在すれば削除
+	•	処理済みCSVは Processed フォルダに移動（安全策）
+
+PowerShellスクリプト
+# =============================================
+# ADユーザー一括削除スクリプト（CSV自動処理）
+# 対象フォルダ: \\ABC\share
+# =============================================
+
+# Active Directoryモジュール読み込み
+Import-Module ActiveDirectory -ErrorAction Stop
+
+# 設定
+$folderPath = "\\ABC\share"
+$processedFolder = Join-Path $folderPath "Processed"
+$logPath = Join-Path $folderPath "DeleteLog_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+
+# ログ関数
+function Write-Log {
+    param([string]$Message)
+    $time = Get-Date -Format "yyyy/MM/dd HH:mm:ss"
+    "$time - $Message" | Out-File -FilePath $logPath -Append -Encoding UTF8
+    Write-Host "$time - $Message" -ForegroundColor Cyan
+}
+
+# Processedフォルダ作成
+if (-not (Test-Path $processedFolder)) {
+    New-Item -Path $processedFolder -ItemType Directory | Out-Null
+}
+
+Write-Log "=== ADユーザー削除処理開始 ==="
+
+# CSVファイルを取得（.csvのみ）
+$csvFiles = Get-ChildItem -Path $folderPath -Filter "*.csv" | Where-Object { !$_.PSIsContainer }
+
+if ($csvFiles.Count -eq 0) {
+    Write-Log "処理対象のCSVファイルが見つかりませんでした。"
+    exit
+}
+
+foreach ($csv in $csvFiles) {
+    Write-Log "ファイル処理開始: $($csv.Name)"
+    
+    try {
+        # CSV読み込み（1列目がSamAccountNameの場合）
+        $users = Import-Csv -Path $csv.FullName -Encoding UTF8
+        
+        foreach ($user in $users) {
+            # 列名がわからない場合は以下のように調整してください
+            $samAccountName = $user.UserName ?? $user.SamAccountName ?? $user.'ユーザー名' ?? $user[0]
+            
+            if ([string]::IsNullOrWhiteSpace($samAccountName)) { continue }
+            
+            # AD存在確認
+            $adUser = Get-ADUser -Filter {SamAccountName -eq $samAccountName} -ErrorAction SilentlyContinue
+            
+            if ($adUser) {
+                try {
+                    Remove-ADUser -Identity $adUser -Confirm:$false -ErrorAction Stop
+                    Write-Log "削除成功: $samAccountName"
+                }
+                catch {
+                    Write-Log "削除失敗: $samAccountName - $($_.Exception.Message)"
+                }
+            }
+            else {
+                Write-Log "存在しないためスキップ: $samAccountName"
+            }
+        }
+        
+        # 処理済みCSVを移動
+        Move-Item -Path $csv.FullName -Destination $processedFolder -Force
+        Write-Log "ファイル処理完了: $($csv.Name) → Processedフォルダへ移動"
+        
+    }
+    catch {
+        Write-Log "ファイル処理エラー $($csv.Name): $($_.Exception.Message)"
+    }
+}
+
+Write-Log "=== 処理完了 ==="
+
+使用方法・注意点
+	1	CSVの列名について
+	◦	1列目がユーザー名（SamAccountName）の場合はそのまま使えます。
+	◦	列名が違う場合は、以下の行を修正してください： $samAccountName = $user.あなたの列名
+	◦	
+	2	タスクスケジューラでの設定
+	◦	プログラム/スクリプト: powershell.exe
+	◦	引数の追加: -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\DeleteADUsers.ps1"
+	◦	実行アカウントは Domain Admins 権限を持つアカウントを使用してください。
+	3	安全対策
+	◦	最初は -WhatIf を付けてテスト推奨： Remove-ADUser -Identity $adUser -WhatIf
+	◦	
+
+必要であれば以下も対応できます：
+	•	特定のファイル名パターンだけ処理
+	•	削除前にバックアップ取得
+	•	メール通知追加
+	•	列名指定版の簡略化
+ご希望の調整があれば教えてください！
