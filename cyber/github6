@@ -1,0 +1,91 @@
+✅ OIDC（GitHub Actions + AWS）の設定手順を、初心者でもわかりやすくステップバイステップでまとめました。
+過去のデータ漏洩経験を踏まえ、最小権限を意識した安全な設定を推奨します。
+
+全体の流れ（所要時間：1〜2時間程度）
+	1	AWS側でOIDC Identity Providerを作成
+	2	AWS側でIAM Roleを作成（GitHubが引き受ける役割）
+	3	GitHub Actionsワークフローを修正
+
+Step 1: AWSでOIDC Identity Providerを作成（1回だけ）
+	1	AWSコンソール → IAM → 左メニュー「Identity providers」→ Add provider
+	2	Provider type: 「OpenID Connect」を選択
+	3	Provider URL: https://token.actions.githubusercontent.com
+	4	Audience: sts.amazonaws.com
+	5	「Get thumbprint」ボタンをクリック（自動で取得）
+	6	Add provider をクリックして完了
+これでGitHubをAWSが信頼する準備ができました。
+
+Step 2: IAM Roleを作成（最小権限で）
+	1	IAM → Roles → Create role
+	2	Trusted entity type: 「Web identity」を選択
+	3	Identity provider: 先ほど作成した token.actions.githubusercontent.com を選択
+	4	Audience: sts.amazonaws.com
+	5	Next
+信頼ポリシー（Trust Policy）の設定（ここが超重要）
+作成後に**信頼関係（Trust relationships）**を編集して、特定のRepository・Branchだけに制限してください。
+おすすめ例（mainブランチのみ許可）:
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::YOUR_ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:YOUR_ORG/YOUR_REPO:ref:refs/heads/main"
+        }
+      }
+    }
+  ]
+}
+	•	YOUR_ORG/YOUR_REPO を実際のものに置き換え
+	•	複数ブランチやEnvironmentを使いたい場合は条件を追加
+
+Step 3: Roleに権限（Permissions）を付与
+	•	このRoleに必要な最小限のポリシーだけをアタッチ （例：S3へのデプロイなら AmazonS3FullAccess ではなく、特定バケットだけのポリシーを作成）
+
+Step 4: GitHub Actionsワークフローの設定
+.github/workflows/deploy.yml の例：
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  id-token: write    # ← OIDCで必須
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::YOUR_ACCOUNT_ID:role/GitHubActionsRoleName  # ← 作成したRole
+          aws-region: ap-northeast-1
+          # role-session-name: optional
+
+      - name: 実際の処理（例）
+        run: |
+          aws s3 ls
+          # または terraform plan / apply など
+
+Terraformでコード管理したい場合（推奨）
+OIDC ProviderとRoleをTerraformで管理すると、再現性が高く監査もしやすいです。必要ならTerraformサンプルも別途出します。
+
+完了後の確認ポイント
+	•	ワークフローを実行してエラーなくAssumeRoleできるか確認
+	•	AWS CloudTrailで「誰が（どのワークフローで）AssumeRoleしたか」追跡できることを確認
+	•	長期アクセスキーは一切使っていない状態にする
+
+この手順で過去の漏洩リスクを大幅に低減できます。
+実際に設定中に詰まった点や 「Terraform版が欲しい」 「もっと厳格にリポジトリ・Environmentで制限したい」 などあれば、すぐにフォローします！
+どうぞ遠慮なく次の質問を！
