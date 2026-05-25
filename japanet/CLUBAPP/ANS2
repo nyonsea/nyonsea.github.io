@@ -1,0 +1,305 @@
+一般的には、以下の流れになります。
+SecurifyサポートがHAR提出を提案しているなら、おそらく「API診断」機能を使う前提です。
+
+⸻
+
+全体フロー
+
+スマホアプリ
+↓
+OWASP ZAPで通信取得
+↓
+HAR保存
+↓
+HAR→OpenAPI変換
+↓
+Securify API診断へ投入
+
+⸻
+
+STEP 1
+
+ZAPで通信取得
+
+まずPCに：
+
+* OWASP ZAP
+
+を入れます。
+
+公式：
+
+OWASP ZAP￼
+
+⸻
+
+STEP 2
+
+スマホをZAPプロキシへ向ける
+
+例えば：
+
+PC:
+192.168.1.10
+ZAP:
+8080
+
+スマホWi-Fi：
+
+Proxy:
+192.168.1.10:8080
+
+⸻
+
+STEP 3
+
+HTTPS証明書導入
+
+スマホで：
+
+http://zap/
+
+へアクセス。
+
+CA証明書をインストール。
+
+⸻
+
+STEP 4
+
+アプリ操作
+
+実際に：
+
+* ログイン
+* 会員情報
+* チケット
+* API呼び出し
+
+などを行う。
+
+ZAPに通信が溜まります。
+
+⸻
+
+STEP 5
+
+HAR出力
+
+ZAPで：
+
+File
+↓
+Export
+↓
+HAR
+
+または：
+
+Save Session
+
+でも可。
+
+⸻
+
+ここが重要
+
+HARをそのままSecurifyに入れるか？
+
+ここはサポート確認が必要です。
+
+なぜならSecurify API診断は、
+通常：
+
+OpenAPI(Swagger)
+
+を想定している可能性が高いからです。
+
+⸻
+
+現実的には
+
+HAR → OpenAPI変換
+
+を行うケースが多いです。
+
+⸻
+
+一番簡単な方法
+
+Postmanを使う
+
+1. PostmanへHAR Import
+
+* Postman
+
+へHARドラッグ。
+
+⸻
+
+2. Collection化
+
+通信がAPI一覧になります。
+
+⸻
+
+3. OpenAPI Export
+
+Export
+↓
+OpenAPI 3.0
+
+⸻
+
+STEP 6
+
+Securifyへ投入
+
+Securify管理画面で：
+
+API診断
+↓
+OpenAPIアップロード
+
+系のメニュー。
+
+⸻
+
+その後
+
+Securifyが：
+
+* Endpoint列挙
+* Parameter解析
+* 認可テスト
+* Injection確認
+* JWT周辺
+* Header確認
+
+などを実施。
+
+⸻
+
+注意点
+
+認証付きAPIは追加設定が必要
+
+例えば：
+
+* Bearer Token
+* Cookie
+* JWT
+
+をSecurify側へ渡す必要があります。
+
+⸻
+
+特にOIDC系で重要
+
+以下を含める。
+
+Authorization: Bearer xxx
+
+⸻
+
+HAR取得時のコツ
+
+1. 不要通信を減らす
+
+除外：
+
+* 広告SDK
+* Firebase
+* Analytics
+* Crashlytics
+
+⸻
+
+2. 重要操作を全部実施
+
+最低でも：
+
+* Login
+* Logout
+* Profile
+* Password変更
+* 会員情報
+* チケット購入
+
+⸻
+
+3. 権限差分も取る
+
+可能なら：
+
+* 一般会員
+* 管理者
+* 有料会員
+
+など。
+
+BOLA検査に重要。
+
+⸻
+
+実際に多い構成
+
+かなり現場寄りですが：
+
+Android Emulator
+↓
+ZAP
+↓
+HAR
+↓
+Postman
+↓
+OpenAPI
+↓
+Securify
+↓
+報告書
+
+です。
+
+⸻
+
+重要な現実
+
+Securifyだけでは完結しない場合が多い
+
+特に：
+
+* 認証
+* OAuth
+* OIDC
+* Deep Link
+* Mobile固有
+
+は、人手確認が必要です。
+
+なので普通は：
+
+自動診断
++
+手動レビュー
+
+になります。
+
+⸻
+
+あなたのケースで特に重要
+
+JリーグIdP連携なら、
+以下は重点確認される可能性があります。
+
+* PKCE
+* redirect_uri
+* JWT
+* Token保存
+* Logout
+* Session失効
+* API認可
+* 他人データ取得不可
+
+です。
