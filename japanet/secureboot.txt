@@ -1,0 +1,149 @@
+インフラ・セキュリティ担当者としては、その調査は正しい方向です。
+
+ただし、**今の段階で最も重要なのは「UEFI証明書の適用状況」そのものより、「移行に失敗する資産の洗い出し」**です。
+
+優先順位を付けると次のようになります。
+
+## 1. UEFI証明書状態の把握（実施中）
+
+現在調査されている内容です。
+
+確認対象は、
+
+* Secure Boot有効／無効
+* DB（許可証明書）
+* DBX（失効リスト）
+* KEK
+* PK
+
+です。
+
+PowerShellなら
+
+```powershell
+Confirm-SecureBootUEFI
+Get-SecureBootUEFI -Name db
+Get-SecureBootUEFI -Name dbx
+```
+
+などで確認できます。
+
+ただし、数千台規模であれば個別確認より資産管理ツールやスクリプト収集が現実的です。
+
+---
+
+## 2. 回復メディアの棚卸し
+
+実はこれが重要です。
+
+確認対象
+
+* WinPE
+* MDT
+* SCCM
+* MECM
+* PXEサーバ
+* USB回復メディア
+* バックアップソフトのレスキュー媒体
+
+例えば
+
+* 2021年作成
+* WinPE 10ベース
+
+のような媒体が残っていないか確認します。
+
+---
+
+## 3. BIOS/UEFI更新状況の確認
+
+危険なのは
+
+* Dell Latitude
+* HP EliteBook
+* Lenovo ThinkPad
+
+などの古い世代です。
+
+確認項目
+
+* BIOSバージョン
+* Secure Boot関連更新履歴
+* OEM公開のKB5025885対応状況
+
+---
+
+## 4. BitLocker回復キー管理
+
+失効処理で問題になるのは
+
+「起動不能」
+
+よりも
+
+「BitLocker回復モード」
+
+です。
+
+確認対象
+
+* AD格納
+* Azure AD格納
+* Entra ID格納
+* 管理台帳
+
+---
+
+## 5. 検証環境構築
+
+本番PCではなく
+
+* 1台
+* 10台
+* 100台
+
+の段階的検証を行います。
+
+Microsoftもこれを推奨しています。
+
+---
+
+## 6. 今後監視すべき情報
+
+特に以下です。
+
+### Microsoft
+
+[Microsoft KB5025885 Guidance](https://support.microsoft.com/help/5025885?utm_source=chatgpt.com)
+
+### Microsoft Secure Boot Guidance
+
+[Windows Hardening Guidance and Key Dates](https://support.microsoft.com/help/latest-windows-hardening-guidance-and-key-dates?utm_source=chatgpt.com)
+
+これらで
+
+* Enforcement Phase開始日
+* 新しい証明書ローテーション
+
+を監視します。
+
+---
+
+## 7. 現時点で私ならやらないこと
+
+まだやらない方がよいものがあります。
+
+* 全端末への一斉失効適用
+* Secure Boot無効化
+* レジストリで強制適用
+* DBX手動投入
+
+これはMicrosoftが明示的に案内するまでは避けます。
+
+---
+
+インフラ担当者の観点では、
+
+**「PCのUEFI証明書を調べる」よりも、「障害発生時に使う運用基盤（WinPE、MECM、バックアップ製品、回復メディア）が新証明書へ移行できるか」を確認する方がリスク低減効果は大きい**です。
+
+もし管理対象が数百〜数千台規模で、Windows 10/11混在環境であれば、PowerShellで「Windows UEFI CA 2023」とDBXの配布状況を一覧化する監査スクリプトの考え方もご説明できます。
