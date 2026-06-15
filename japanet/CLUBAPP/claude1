@@ -1,0 +1,374 @@
+# JリーグIdP認証通信のMITMProxy経由HAR取得・Securify評価 手順書
+
+## 全体構成図
+
+まず全体の流れを整理します。
+
+```
+iPhone → (Wi-Fi) → PC(mitmproxy) → インターネット → JリーグIdP
+                                                    ↓
+                                              AWS システム
+```
+
+---
+
+## 【Phase 1】PC側セットアップ（mitmproxy）
+
+### 1-1. mitmproxyのインストール
+
+**macOSの場合**
+```bash
+brew install mitmproxy
+```
+
+**Windowsの場合**
+- https://mitmproxy.org/downloads/ から最新版インストーラをDL・実行
+
+**インストール確認**
+```bash
+mitmproxy --version
+```
+
+---
+
+### 1-2. mitmproxyの起動（フィルタリング設定付き）
+
+IdP認証通信**だけ**をキャプチャするために、起動時からフィルターを設定します。
+
+まず、JリーグIdPのドメインを事前に確認しておきます（例：`auth.jleague.jp` など）。
+
+#### ✅ 推奨：`mitmweb`（GUIブラウザ管理画面）で起動
+
+```bash
+mitmweb --listen-host 0.0.0.0 --listen-port 8080 --web-port 8081
+```
+
+起動後、ブラウザで `http://localhost:8081` を開くとGUI画面が表示されます。
+
+#### フィルタリング用スクリプト（IdPドメインのみキャプチャ）
+
+下記の `filter_idp.py` を作成します：
+
+```python
+# filter_idp.py
+# JリーグIdPドメインのみをキャプチャし、それ以外は素通りさせる
+
+# キャプチャ対象ドメインリスト（実際のIdPドメインに変更すること）
+TARGET_DOMAINS = [
+    "auth.jleague.jp",        # 例：JリーグIdPドメイン
+    "id.jleague.jp",          # 例：別のIdPエンドポイント
+    # 必要に応じて追加
+]
+
+def request(flow):
+    host = flow.request.pretty_host
+    if not any(domain in host for domain in TARGET_DOMAINS):
+        flow.kill()  # 対象外の通信は遮断（キャプチャしない）
+```
+
+#### フィルタスクリプト付きで起動：
+
+```bash
+mitmweb \
+  --listen-host 0.0.0.0 \
+  --listen-port 8080 \
+  --web-port 8081 \
+  -s filter_idp.py
+```
+
+---
+
+### 1-3. PCのIPアドレスを確認
+
+iPhoneのプロキシ設定で使うため、PCのローカルIPを控えます。
+
+```bash
+# macOS
+ipconfig getifaddr en0
+
+# Windows
+ipconfig
+# → Wi-Fiアダプタの「IPv4 アドレス」を確認
+```
+
+例：`192.168.1.10`
+
+---
+
+## 【Phase 2】iPhone側セットアップ（まっさらな端末）
+
+### 2-1. iPhoneをPCと同じWi-Fiに接続
+
+設定 → Wi-Fi → 同じSSIDに接続
+
+---
+
+### 2-2. Wi-FiプロキシをPCに向ける
+
+```
+設定 → Wi-Fi → 接続中のSSIDの「ⓘ」→ 一番下「プロキシを構成」
+→「手動」を選択
+
+サーバ：192.168.1.10（PCのIP）
+ポート：8080
+認証：オフ
+```
+
+---
+
+### 2-3. mitmproxyのCA証明書をiPhoneにインストール
+
+これをしないとHTTPS通信が復号できません。
+
+**① iPhoneのSafariで以下にアクセス**
+```
+http://mitm.it
+```
+
+> ⚠️ プロキシ設定後でないと表示されません
+
+**② 「iOS」をタップ** → プロファイルをダウンロード
+
+**③ 証明書をインストール**
+```
+設定 → 一般 → VPNとデバイス管理
+→ ダウンロード済みプロファイル「mitmproxy」→「インストール」
+```
+
+**④ 証明書を信頼（重要！）**
+```
+設定 → 一般 → 情報 → 証明書信頼設定
+→「mitmproxy」のトグルをONにする
+```
+
+---
+
+## 【Phase 3】通信キャプチャの実施
+
+### 3-1. mitmwebのGUI画面を整理
+
+ブラウザで `http://localhost:8081` を開き、**「Clear」ボタンで既存ログをクリア**してから開始します。
+
+---
+
+### 3-2. iPhoneでアプリを起動し、JリーグIdP認証を実施
+
+アプリを起動して、実際にサインインします：
+1. アプリ起動
+2. サインインボタンをタップ
+3. JリーグIdP画面（ブラウザ or WebView）でID/PW入力
+4. 認証完了・アプリに戻る
+
+この間、mitmwebのGUI画面にリクエストが流れてきます。
+
+---
+
+### 3-3. キャプチャ内容の確認（フィルタリング）
+
+mitmwebのGUI画面で確認：
+
+- **filter_idp.py** を使っている場合 → IdPドメインの通信のみが表示されます
+- 念のためGUI上のフィルタボックスに以下を入力して絞り込みます：
+
+```
+~d auth.jleague.jp
+```
+
+> `~d` はドメインフィルタ。IdPのドメインに合わせて変更してください。
+
+---
+
+## 【Phase 4】HARファイルのエクスポート
+
+### 4-1. コマンドラインでIdP通信のみHARに保存（最も確実な方法）
+
+mitmproxyには `--save-stream-file` と `mitmdump` を組み合わせた方法が確実です。
+
+#### 専用スクリプト `export_idp_har.py` を作成：
+
+```python
+# export_idp_har.py
+# IdP関連通信のみをHARとして出力するスクリプト
+
+import json
+import time
+from datetime import datetime, timezone
+
+# ★ 実際のJリーグIdPドメインに変更
+TARGET_DOMAINS = [
+    "auth.jleague.jp",
+    "id.jleague.jp",
+]
+
+captured_entries = []
+
+HAR_TEMPLATE = {
+    "log": {
+        "version": "1.2",
+        "creator": {
+            "name": "mitmproxy",
+            "version": "1.0"
+        },
+        "entries": []
+    }
+}
+
+def should_capture(flow) -> bool:
+    host = flow.request.pretty_host
+    return any(domain in host for domain in TARGET_DOMAINS)
+
+def response(flow):
+    if not should_capture(flow):
+        return
+
+    req = flow.request
+    res = flow.response
+
+    # リクエストヘッダー
+    req_headers = [{"name": k, "value": v} for k, v in req.headers.items()]
+    # レスポンスヘッダー
+    res_headers = [{"name": k, "value": v} for k, v in res.headers.items()]
+
+    entry = {
+        "startedDateTime": datetime.fromtimestamp(
+            req.timestamp_start, tz=timezone.utc
+        ).isoformat(),
+        "time": (flow.response.timestamp_end - req.timestamp_start) * 1000,
+        "request": {
+            "method": req.method,
+            "url": req.pretty_url,
+            "httpVersion": "HTTP/1.1",
+            "headers": req_headers,
+            "queryString": [
+                {"name": k, "value": v}
+                for k, v in req.query.items()
+            ],
+            "postData": {
+                "mimeType": req.headers.get("content-type", ""),
+                "text": req.get_text(strict=False) or ""
+            } if req.content else None,
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": len(req.content) if req.content else 0,
+        },
+        "response": {
+            "status": res.status_code,
+            "statusText": res.reason or "",
+            "httpVersion": "HTTP/1.1",
+            "headers": res_headers,
+            "content": {
+                "size": len(res.content) if res.content else 0,
+                "mimeType": res.headers.get("content-type", ""),
+                "text": res.get_text(strict=False) or ""
+            },
+            "cookies": [],
+            "redirectURL": res.headers.get("location", ""),
+            "headersSize": -1,
+            "bodySize": len(res.content) if res.content else 0,
+        },
+        "timings": {
+            "send": 0,
+            "wait": (res.timestamp_start - req.timestamp_end) * 1000
+                    if req.timestamp_end else 0,
+            "receive": (res.timestamp_end - res.timestamp_start) * 1000,
+        },
+        "cache": {}
+    }
+
+    captured_entries.append(entry)
+    print(f"[CAPTURED] {req.method} {req.pretty_url}")
+
+def done():
+    """mitmproxy終了時にHARファイルを出力"""
+    HAR_TEMPLATE["log"]["entries"] = captured_entries
+    output_path = f"jleague_idp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.har"
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(HAR_TEMPLATE, f, ensure_ascii=False, indent=2)
+    print(f"\n✅ HARファイルを保存しました: {output_path}")
+    print(f"   キャプチャ件数: {len(captured_entries)} リクエスト")
+```
+
+#### このスクリプトで起動：
+
+```bash
+mitmweb \
+  --listen-host 0.0.0.0 \
+  --listen-port 8080 \
+  --web-port 8081 \
+  -s export_idp_har.py
+```
+
+#### 終了方法（HARファイルを出力するため）：
+```
+Ctrl + C で mitmweb を終了
+→ カレントディレクトリに jleague_idp_YYYYMMDD_HHMMSS.har が生成される
+```
+
+---
+
+## 【Phase 5】Securifyへの取り込み・OWASP評価
+
+### 5-1. HARファイルの内容確認
+
+提出前にHARが正しいことを確認します：
+
+```bash
+# jqコマンドでエントリ数とURLを確認（macOS/Linux）
+cat jleague_idp_*.har | jq '.log.entries[] | .request.url'
+```
+
+以下のようなIdP関連URLだけが表示されればOKです：
+```
+"https://auth.jleague.jp/oauth/authorize?..."
+"https://auth.jleague.jp/oauth/token"
+"https://auth.jleague.jp/userinfo"
+...
+```
+
+---
+
+### 5-2. Securifyへの取り込み
+
+1. SecurifyのGUI画面を開く
+2. 「新規プロジェクト作成」または既存プロジェクトを選択
+3. 「HARファイルインポート」から `.har` ファイルを読み込む
+4. OWASP Top 10に基づくスキャンを実行
+
+---
+
+## 【重要】作業後のクリーンアップ
+
+評価完了後は必ず以下を実施：
+
+```
+iPhone側：
+  設定 → Wi-Fi → プロキシ → 「オフ」に戻す
+  設定 → 一般 → VPNとデバイス管理 → mitmproxyプロファイル削除
+  設定 → 一般 → 情報 → 証明書信頼設定 → mitmproxyをOFF
+```
+
+---
+
+## まとめ チェックリスト
+
+| # | 手順 | 確認 |
+|---|------|------|
+| 1 | PCにmitmproxyインストール | ☐ |
+| 2 | filter/exportスクリプトにIdPドメインを正確に設定 | ☐ |
+| 3 | PCのローカルIPアドレスを確認 | ☐ |
+| 4 | iPhoneを同一Wi-Fiに接続 | ☐ |
+| 5 | iPhoneのプロキシをPCに向ける | ☐ |
+| 6 | mitm.itからCA証明書インストール＆信頼設定 | ☐ |
+| 7 | mitmwebをスクリプト付きで起動 | ☐ |
+| 8 | ログクリア後にアプリでIdP認証を実施 | ☐ |
+| 9 | Ctrl+CでHARファイルを出力 | ☐ |
+| 10 | jqでHAR内容を確認（IdP通信のみか） | ☐ |
+| 11 | SecurifyにHARをインポートしてOWASP評価 | ☐ |
+| 12 | iPhone側のプロキシ・証明書を削除 | ☐ |
+
+---
+
+> **⚠️ 注意事項**
+> - 本手順は**評価・テスト専用**です。本番環境や第三者の認証情報は使用しないでください
+> - mitmproxyのCA証明書は評価後に必ず削除してください
+> - JリーグIdPの実際のドメインは事前に確認し、スクリプトの `TARGET_DOMAINS` を正確に設定してください
