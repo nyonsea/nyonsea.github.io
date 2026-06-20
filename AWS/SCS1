@@ -1,0 +1,70 @@
+了解しました！ 背景情報をありがとうございます。かなり有利な条件が揃っています。
+	•	Solutions Architect Associate（4月27日取得） → AWS全体像はしっかり把握済み
+	•	情報セキュリティマネジメント + 基本情報
+	•	情報処理安全確保支援士（SC）勉強2年、午後52点 → セキュリティの考え方・リスク対応・インシデント対応の基礎力は既にかなり高い
+このレベルであれば、1ヵ月半（約45日）でSCS-C03合格は十分現実的です。 前回のスケジュールをあなたの強みを活かした形に圧縮・最適化します。
+
+最適化版スケジュール（来週月曜日スタート）
+全体方針
+	•	SA Associateがあるので「サービス概要」はスキップ気味
+	•	SC午後対策で培った「シナリオ思考」をAWSサービスに置き換える
+	•	ハンズオンと模擬試験の比率を高める（特に後半）
+	•	目標：本番模擬試験で80%以上安定
+Week 0（今週中：準備・診断）
+	•	AWS Exam Guide（SCS-C03）を全部読む
+	•	AWS Skill Builderの Official Practice Question Set を解いて現在のスコアを確認
+	•	Udemy（Stephane Maarek推奨）またはZeal VoraのSCSコースを購入
+	•	Tutorials DojoまたはWhizlabsの模擬試験セットを購入（最重要）
+	•	AWSアカウントで基本的なIAM/KMSラボを軽く復習
+Week 1（IAM & Governance 最重点）
+	•	Domain 4: Identity & Access Management（最重要20%超）
+	◦	IAM Policy（JSON読み書き徹底）、Conditions、Permissions boundaries、IAM Roles、Identity Center、Organizations SCP
+	•	Domain 6: Management & Security Governance
+	◦	Control Tower、Config、Audit Manager、Compliance（CIS Benchmarkなど）
+	•	SC午後の知識を活かして「誰が・何を・いつ・どのように許可するか」をAWSでどう実装するかに集中
+	•	毎日：ポリシー作成ハンズオン（最低5個）
+Week 2（データ保護 + 暗号化）
+	•	Domain 5: Data Protection
+	◦	KMS（キー種類、ポリシー、Grant、ローテーション、自動キー削除）、S3暗号化（SSE系）、Macie、ACM、CloudHSM
+	•	KMSポリシーとIAMポリシーの違い・連携を徹底的に理解
+	•	ハンズオン：S3 + KMS、EBS暗号化、Secrets Manager + Lambda
+Week 3（インフラ & ネットワークセキュリティ）
+	•	Domain 3: Infrastructure Security
+	◦	VPC（SG、NACL、Flow Logs）、Network Firewall、WAFv2、Shield、Route 53 Resolver DNS Firewall
+	◦	EC2 Instance Profile、SSM Session Manager、Systems Manager Patch Manager
+	•	ラボ：WAFルール作成、VPC設計（3-tier）、PrivateLink
+Week 4（検知・監視・ログ）
+	•	Domain 1: Detection + Domain 2: Logging & Monitoring
+	◦	GuardDuty（Findings種類）、Security Hub、Inspector v2、CloudTrail（組織レベル）、CloudWatch Logs Insights
+	◦	Detective、Audit Manager
+	•	ハンズオン：GuardDuty + EventBridge + Lambda自動対応
+Week 5（インシデント対応 + 総復習）
+	•	Incident Response in AWS 白書をしっかり読む
+	•	Forensics（S3、EBSスナップショット、SSM Run Commandなど）
+	•	サービス連携の全体像整理（GuardDuty → Security Hub → EventBridge → Lambda/SNS）
+	•	弱点ドメインを特定して集中補強
+Week 6（模擬試験ラッシュ & 仕上げ）
+	•	毎日1回フル模擬試験（Tutorials Dojo推奨）
+	•	間違えた問題は公式ドキュメントに戻って原因究明 + 必要ならハンズオン
+	•	スコア推移を記録（70% → 78% → 82%以上を目指す）
+	•	用語・サービス連携フラッシュカード作成
+Week 6.5（最終週：試験前3〜4日）
+	•	弱点のみ集中（特にKMSポリシー、IAM Conditions、GuardDuty Findings）
+	•	軽めの復習 + 公式Practice Exam
+	•	前日は超軽め（午前中だけ）＋早寝
+
+時間配分目安（平日）
+	•	平日：2.5〜3.5時間（講座/動画 40% + ハンズオン 30% + 問題演習 30%）
+	•	週末：5〜7時間（模擬試験中心）
+特に強化すべきポイント（あなたの背景を踏まえて）
+	1	AWS特有のポリシー表現（SC午後との最大の違い）
+	2	KMSの深掘り（Key Policy vs IAM Policy、Grant、ImportKeyMaterialなど）
+	3	サービス連携と自動化（EventBridge + Lambdaのインシデント対応フロー）
+	4	新機能・マネージドサービス（Security Hub Automation Rules、Inspector v2など）
+
+このスケジュールで毎日継続できれば、合格率はかなり高いと思います。 SCの午後対策経験がある人は、AWS SCSで「考え方」が活きやすいので、自信を持ってください。
+進捗確認用として、
+	•	Week 1終了時に「今の模擬試験スコア教えてください」
+	•	苦手ドメインが出てきたらすぐに調整します
+何か質問ありますか？ （例：おすすめ講座の比較、KMS重点ラボ一覧、模擬試験の選び方など）
+一緒に合格しましょう！🔥
