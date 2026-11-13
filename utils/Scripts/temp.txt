@@ -127,3 +127,26 @@ APP_REPORTのビュー	2個ともVALID
 - 集計結果の整合性を確認できている。
 - 帳票用ビューが正常に動作している。
 次は、いよいよData Pumpによる移行リハーサルに入れます。
+
+【データベース環境】
+ Oracle Linux 7.8 / Oracle Database 19c Enterprise Edition
+ CDB:ORCLCDB
+ PDB:MIGPDB1,MIGPDB2,MIGPDB3
+
+【スキーマ構成】
+APP_OWNER:業務テーブル10個,シーケンス4個,合成データ投入済み
+APP_BATCH:バッチ管理・集計テーブル2個,シーケンス1個,PRC_ORDER_SUMMARY作成済み
+APP_REPORT:参照用ビュー2個作成済み
+
+【検証実績】
+APP_OWNER：通常データ170,530行、CLOB 5,000行、BLOB 1,000行
+APP_BATCH：顧客5,000件、受注20,000件の集計処理成功
+受注金額合計と明細金額合計の差異0
+APP_REPORT：2ビューともVALID、参照結果確認済み
+スキーマ間SELECT権限設定済み
+
+【次回作業】
+1. スキーマ間依存関係・権限の棚卸し
+2. Data Pump Export / Import検証
+3. 移行前後の件数・制約・索引・LOB・シーケンス等の整合性確認
+4. Azure極小踏み台VMの構築・接続経路検証
